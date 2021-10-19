@@ -154,27 +154,49 @@ simdata1 <- simdata(fixef = fixef,
 ```
 
 
-
+## Analysis PSE
 
 ```{r, message = FALSE}
-simdata1 %>%
-  filter(subjectID %in% make_id(1, "s", 3)) %>%
-  group_by(subjectID, color.e, contrast.e, size) %>%
-  summarise(response = mean(response, na.rm = TRUE),
-            .groups = "drop")
+analyse <- function(simdata1) {
+  simplified_PSEs = simdata1 %>% 
+    group_by(color, subjectID, contrast) %>% 
+    nest() %>% 
+    mutate(data = map(data, ~ glm(response ~ size_delta, family=binomial(link='logit'), data = .))) %>%
+    # get the coefficients
+    mutate(data = map(data, ~ coefficients(.))) %>% 
+    # convert coefficients from weird format
+    mutate(data = map(data, ~ as_tibble(as.list(.)))) %>% 
+    # convert back to a normal table with 1 row per boot * condition * subject
+    unnest(data) %>% 
+    # make coefficients easier to manage
+    rename(intercept = `(Intercept)`) %>% 
+    mutate(pse = -intercept/size_delta)
+  
+  afex::aov_ez(
+    id="subjectID", 
+    dv="pse", 
+    simplified_PSEs, 
+    within=c("color", "contrast"), 
+    anova_table = list(correction="none", es = "pes")) %>% 
+    # use pes to calculate cohen's f
+    `$`('anova_table') %>% 
+    mutate(cohens_f = sqrt(pes/(1-pes))) %>% 
+    # why are the row names so hard to access?
+    as.data.frame() %>% 
+    rownames_to_column("effect")
+}
 ```
 
-## Analysis
+## Power analysis
 
 ```{r}
-model <- glmer(response ~ 0 + color.e * contrast.e +
-                 (1 | subjectID), 
-               data = simdata1, 
-               family = binomial(link = "logit"))
-
-summary(model)
+power_table <- map_df(1:10, ~{ simdata(fixef) %>% analyse() })
 ```
 
+```{r}
+ggplot(power_table, aes(x = cohens_f, color = effect)) +
+  geom_density()
+```
 
 
 
