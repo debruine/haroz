@@ -1,0 +1,114 @@
+---
+title: "DataSim"
+author: "Lisa DeBruine"
+date: "19/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(faux)
+library(lmerTest)
+```
+
+```{r}
+data <- read_csv("data/simplified_data.csv") %>%
+  mutate(size = size_delta/10,
+         color = factor(color),
+         contrast = factor(contrast)) %>%
+  add_contrast("color", colnames = "color.e") %>%
+  add_contrast("contrast", colnames = "contrast.e")
+```
+
+* 7 subjects
+* color = T/F (within subject)
+* contrast = +/- (between subject)
+* size_delta = seq(-80,+80, 10) w/in subject
+* response = 0/1
+
+
+```{r}
+
+
+ggplot(data, aes(x = size_delta, y = response,
+                 color = color)) +
+  facet_grid(~subjectID) +
+  stat_summary()
+```
+
+
+
+```{r}
+model <- glmer(response ~ color.e * contrast.e * size +
+                 (1 | subjectID), 
+               data = data, 
+               family = binomial(link = "logit"))
+
+summary(model)
+```
+
+
+```{r}
+pred_data <- predict(model, type = "response")
+```
+
+```{r}
+ggplot(data, aes(x = size_delta, y = pred_data,
+                 color = color)) +
+  facet_grid(~subjectID) +
+  stat_summary()
+```
+
+
+
+
+```{r}
+est <- broom.mixed::tidy(model)
+```
+
+
+## Data Exclusions by contrast
+
+```{r}
+excl <- count(data, color, contrast, size_delta) %>% 
+  mutate(n = ifelse(size_delta == 0, n/2, n))
+
+ggplot(excl, aes(x = size_delta, y = n, color = color)) +
+  facet_wrap(~contrast) +
+  geom_point() +
+  geom_smooth(method = lm) +
+  ylim(0, 140)
+```
+
+
+```{r}
+keepers <- excl %>%
+  group_by(contrast) %>%
+  summarise(mean = mean(n))
+```
+
+
+## Fake some data
+
+```{r}
+subj_n <- 1
+trial_n <- 20
+  
+```
+
+```{r}
+simdata <- add_random(subjectID = subj_n) %>%
+  add_random(trial = trial_n) %>%
+  add_within(contrast = c("positive", "negative")) %>%
+  add_within(color = c(TRUE, FALSE)) %>%
+  add_within(size_delta = seq(0, 80, 10)) %>%
+  add_within(sign_delta = c("+", "-"))
+```
+
+
+
+
+
+
+
