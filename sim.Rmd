@@ -12,6 +12,8 @@ library(faux)
 library(lmerTest)
 ```
 
+## Load and process data
+
 ```{r}
 data <- read_csv("data/simplified_data.csv") %>%
   mutate(size = size_delta/10,
@@ -29,8 +31,6 @@ data <- read_csv("data/simplified_data.csv") %>%
 
 
 ```{r}
-
-
 ggplot(data, aes(x = size_delta, y = response,
                  color = color)) +
   facet_grid(~subjectID) +
@@ -38,6 +38,7 @@ ggplot(data, aes(x = size_delta, y = response,
 ```
 
 
+## Model to get parameter estimate
 
 ```{r}
 model <- glmer(response ~ color.e * contrast.e * size +
@@ -70,40 +71,108 @@ est <- broom.mixed::tidy(model)
 
 ## Data Exclusions by contrast
 
-```{r}
-excl <- count(data, color, contrast, size_delta) %>% 
-  mutate(n = ifelse(size_delta == 0, n/2, n))
-
-ggplot(excl, aes(x = size_delta, y = n, color = color)) +
-  facet_wrap(~contrast) +
-  geom_point() +
-  geom_smooth(method = lm) +
-  ylim(0, 140)
-```
-
 
 ```{r}
-keepers <- excl %>%
-  group_by(contrast) %>%
-  summarise(mean = mean(n))
+included <- count(data, subjectID, color, contrast, size_delta) %>% 
+  mutate(n = ifelse(size_delta == 0, n/2, n)) %>%
+  group_by(subjectID, contrast) %>%
+  summarise(mean = mean(n), .groups = "drop") %>%
+  summarise(mean = mean(mean), .groups = "drop") %>%
+  pull(mean)
 ```
 
 
 ## Fake some data
 
 ```{r}
-subj_n <- 1
-trial_n <- 20
-  
+# logit functions
+
+logit <- function(x) { log(x / (1 - x)) }
+inv_logit <- function(x) { 1 / (1 + exp(-x)) }
 ```
 
 ```{r}
-simdata <- add_random(subjectID = subj_n) %>%
-  add_random(trial = trial_n) %>%
-  add_within(contrast = c("positive", "negative")) %>%
-  add_within(color = c(TRUE, FALSE)) %>%
-  add_within(size_delta = seq(0, 80, 10)) %>%
-  add_within(sign_delta = c("+", "-"))
+# simulation function
+
+simdata <- function(fixef,
+                    subj_n = 100, 
+                    trial_n = 24,
+                    excluded = 0) {
+  add_random(subjectID = subj_n) %>%
+    add_random(trial = trial_n) %>%
+    add_within(contrast = c("positive", "negative")) %>%
+    add_within(color = c(TRUE, FALSE)) %>%
+    add_within(size_delta = seq(0, 80, 10)) %>%
+    add_within(sign_delta = c("+", "-")) %>%
+    add_ranef("subjectID", sub_i = fixef$`sd__(Intercept)`) %>%
+    mutate(size_delta = as.character(size_delta) %>% as.integer() *
+             ifelse(sign_delta == "+", 1, -1),
+           size = size_delta/10,
+           color = factor(color),
+           contrast = factor(contrast)) %>%
+    add_contrast("color", colnames = "color.e") %>%
+    add_contrast("contrast", colnames = "contrast.e") %>%
+    mutate(
+      # calculate gaussian DV
+      Y = fixef$`(Intercept)` + sub_i + 
+        fixef$color.e * color.e +
+        fixef$contrast.e * contrast.e +
+        fixef$size * size +
+        fixef$`color.e:contrast.e` * color.e * contrast.e +
+        fixef$`color.e:size` * color.e * size +
+        fixef$`contrast.e:size` * contrast.e * size +
+        fixef$`color.e:contrast.e:size` * color.e * contrast.e * size,
+      pr = inv_logit(Y), # transform to probability of getting 1
+      response = rbinom(nrow(.), 1, pr) # sample from bernoulli distribution
+    ) %>%
+    select(subjectID, 
+           contrast, color, size_delta, 
+           color.e, contrast.e, size, 
+           response) %>%
+    messy(prop = excluded, response)
+}
+```
+
+```{r}
+# set parameters
+subj_n <- 100
+trial_n <- 24
+excluded <- (trial_n - included)/trial_n
+
+# fixed and random effects
+fixef <- setNames(object = est$estimate, 
+                  nm = est$term) %>%
+  as.list()
+```
+
+```{r}
+# simulate one dataset
+simdata1 <- simdata(fixef = fixef, 
+                    subj_n = subj_n, 
+                    trial_n = trial_n,
+                    excluded = excluded)
+```
+
+
+
+
+```{r, message = FALSE}
+simdata1 %>%
+  filter(subjectID %in% make_id(1, "s", 3)) %>%
+  group_by(subjectID, color.e, contrast.e, size) %>%
+  summarise(response = mean(response, na.rm = TRUE),
+            .groups = "drop")
+```
+
+## Analysis
+
+```{r}
+model <- glmer(response ~ 0 + color.e * contrast.e +
+                 (1 | subjectID), 
+               data = simdata1, 
+               family = binomial(link = "logit"))
+
+summary(model)
 ```
 
 
